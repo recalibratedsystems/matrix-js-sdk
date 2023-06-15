@@ -33,14 +33,7 @@ import {
     PushDetails,
 } from "./models/event";
 import { StubStore } from "./store/stub";
-import { CallEvent, CallEventHandlerMap, createNewMatrixCall, MatrixCall, supportsMatrixCall } from "./webrtc/call";
 import { Filter, IFilterDefinition, IRoomEventFilter } from "./filter";
-import { CallEventHandlerEvent, CallEventHandler, CallEventHandlerEventHandlerMap } from "./webrtc/callEventHandler";
-import {
-    GroupCallEventHandler,
-    GroupCallEventHandlerEvent,
-    GroupCallEventHandlerEventHandlerMap,
-} from "./webrtc/groupCallEventHandler";
 import * as utils from "./utils";
 import { replaceParam, QueryDict, sleep, noUnsafeEventProps, safeSet } from "./utils";
 import { Direction, EventTimeline } from "./models/event-timeline";
@@ -176,8 +169,6 @@ import {
 } from "./@types/PushRules";
 import { IThreepid } from "./@types/threepids";
 import { CryptoStore, OutgoingRoomKeyRequest } from "./crypto/store/base";
-import { GroupCall, IGroupCallDataChannelOptions, GroupCallIntent, GroupCallType } from "./webrtc/groupCall";
-import { MediaHandler } from "./webrtc/mediaHandler";
 import { LoginTokenPostResponse, ILoginFlowsResponse, IRefreshTokenResponse, SSOAction } from "./@types/auth";
 import { TypedEventEmitter } from "./models/typed-event-emitter";
 import { MAIN_ROOM_TIMELINE, ReceiptType } from "./@types/read_receipts";
@@ -945,12 +936,6 @@ export type EmittedEvents =
     | MatrixEventEvents
     | RoomMemberEvents
     | UserEvents
-    | CallEvent // re-emitted by call.ts using Object.values
-    | CallEventHandlerEvent.Incoming
-    | GroupCallEventHandlerEvent.Incoming
-    | GroupCallEventHandlerEvent.Outgoing
-    | GroupCallEventHandlerEvent.Ended
-    | GroupCallEventHandlerEvent.Participants
     | HttpApiEvent.SessionLoggedOut
     | HttpApiEvent.NoConsent
     | BeaconEvent;
@@ -1156,9 +1141,6 @@ export type ClientEventHandlerMap = {
     MatrixEventHandlerMap &
     RoomMemberEventHandlerMap &
     UserEventHandlerMap &
-    CallEventHandlerEventHandlerMap &
-    GroupCallEventHandlerEventHandlerMap &
-    CallEventHandlerMap &
     HttpApiEventHandlerMap &
     BeaconEventHandlerMap;
 
@@ -1196,8 +1178,6 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
 
     private cryptoBackend?: CryptoBackend; // one of crypto or rustCrypto
     public cryptoCallbacks: ICryptoCallbacks; // XXX: Intended private, used in code.
-    public callEventHandler?: CallEventHandler; // XXX: Intended private, used in code.
-    public groupCallEventHandler?: GroupCallEventHandler;
     public supportsCallTransfer = false; // XXX: Intended private, used in code.
     public forceTURN = false; // XXX: Intended private, used in code.
     public iceCandidatePoolSize = 0; // XXX: Intended private, used in code.
@@ -1246,7 +1226,6 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
     protected checkTurnServersIntervalID?: ReturnType<typeof setInterval>;
     protected exportedOlmDeviceToImport?: IExportedOlmDevice;
     protected txnCtr = 0;
-    protected mediaHandler = new MediaHandler(this);
     protected sessionId: string;
     protected pendingEventEncryption = new Map<string, Promise<void>>();
 
@@ -1326,16 +1305,6 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
                 }
                 return res;
             });
-        }
-
-        if (supportsMatrixCall()) {
-            this.callEventHandler = new CallEventHandler(this);
-            this.groupCallEventHandler = new GroupCallEventHandler(this);
-            this.canSupportVoip = true;
-            // Start listening for calls after the initial sync is done
-            // We do not need to backfill the call event buffer
-            // with encrypted events that might never get decrypted
-            this.on(ClientEvent.Sync, this.startCallEventHandler);
         }
 
         this.on(ClientEvent.Sync, this.fixupRoomNotifications);
@@ -1548,11 +1517,6 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
         this.syncApi = undefined;
 
         this.peekSync?.stopPeeking();
-
-        this.callEventHandler?.stop();
-        this.groupCallEventHandler?.stop();
-        this.callEventHandler = undefined;
-        this.groupCallEventHandler = undefined;
 
         global.clearInterval(this.checkTurnServersIntervalID);
         this.checkTurnServersIntervalID = undefined;
@@ -1851,13 +1815,6 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
     }
 
     /**
-     * @returns
-     */
-    public getMediaHandler(): MediaHandler {
-        return this.mediaHandler;
-    }
-
-    /**
      * Set whether VoIP calls are forced to use only TURN
      * candidates. This is the same as the forceTURN option
      * when creating the client.
@@ -1882,79 +1839,6 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
      */
     public getUseE2eForGroupCall(): boolean {
         return this.useE2eForGroupCall;
-    }
-
-    /**
-     * Creates a new call.
-     * The place*Call methods on the returned call can be used to actually place a call
-     *
-     * @param roomId - The room the call is to be placed in.
-     * @returns the call or null if the browser doesn't support calling.
-     */
-    public createCall(roomId: string): MatrixCall | null {
-        return createNewMatrixCall(this, roomId);
-    }
-
-    /**
-     * Creates a new group call and sends the associated state event
-     * to alert other members that the room now has a group call.
-     *
-     * @param roomId - The room the call is to be placed in.
-     */
-    public async createGroupCall(
-        roomId: string,
-        type: GroupCallType,
-        isPtt: boolean,
-        intent: GroupCallIntent,
-        dataChannelsEnabled?: boolean,
-        dataChannelOptions?: IGroupCallDataChannelOptions,
-    ): Promise<GroupCall> {
-        if (this.getGroupCallForRoom(roomId)) {
-            throw new Error(`${roomId} already has an existing group call`);
-        }
-
-        const room = this.getRoom(roomId);
-
-        if (!room) {
-            throw new Error(`Cannot find room ${roomId}`);
-        }
-
-        // Because without Media section a WebRTC connection is not possible, so need a RTCDataChannel to set up a
-        // no media WebRTC connection anyway.
-        return new GroupCall(
-            this,
-            room,
-            type,
-            isPtt,
-            intent,
-            undefined,
-            dataChannelsEnabled || this.isVoipWithNoMediaAllowed,
-            dataChannelOptions,
-            this.isVoipWithNoMediaAllowed,
-        ).create();
-    }
-
-    /**
-     * Wait until an initial state for the given room has been processed by the
-     * client and the client is aware of any ongoing group calls. Awaiting on
-     * the promise returned by this method before calling getGroupCallForRoom()
-     * avoids races where getGroupCallForRoom is called before the state for that
-     * room has been processed. It does not, however, fix other races, eg. two
-     * clients both creating a group call at the same time.
-     * @param roomId - The room ID to wait for
-     * @returns A promise that resolves once existing group calls in the room
-     *          have been processed.
-     */
-    public waitUntilRoomReadyForGroupCalls(roomId: string): Promise<void> {
-        return this.groupCallEventHandler!.waitUntilRoomReadyForGroupCalls(roomId);
-    }
-
-    /**
-     * Get an existing group call for the provided room.
-     * @returns The group call or null if it doesn't already exist.
-     */
-    public getGroupCallForRoom(roomId: string): GroupCall | null {
-        return this.groupCallEventHandler!.groupCalls.get(roomId) || null;
     }
 
     /**
@@ -6934,14 +6818,6 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
 
         return this.http.authedRequest(Method.Post, path, undefined, {});
     }
-
-    private startCallEventHandler = (): void => {
-        if (this.isInitialSyncComplete()) {
-            this.callEventHandler!.start();
-            this.groupCallEventHandler!.start();
-            this.off(ClientEvent.Sync, this.startCallEventHandler);
-        }
-    };
 
     /**
      * Once the client has been initialised, we want to clear notifications we

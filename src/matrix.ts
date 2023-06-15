@@ -61,10 +61,6 @@ export * from "./models/room-summary";
 export * as ContentHelpers from "./content-helpers";
 export * as SecretStorage from "./secret-storage";
 export type { ICryptoCallbacks } from "./crypto"; // used to be located here
-export { createNewMatrixCall } from "./webrtc/call";
-export type { MatrixCall } from "./webrtc/call";
-export { GroupCallEvent, GroupCallIntent, GroupCallState, GroupCallType } from "./webrtc/groupCall";
-export type { GroupCall } from "./webrtc/groupCall";
 export { CryptoEvent } from "./crypto";
 
 /**
