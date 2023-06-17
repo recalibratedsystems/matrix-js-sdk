@@ -2008,6 +2008,11 @@ export class Room extends ReadReceipt<RoomEmittedEvents, RoomEventHandlerMap> {
                 const poll = new Poll(event, this.client, this);
                 this.polls.set(event.getId()!, poll);
                 this.emit(PollEvent.New, poll);
+
+                // remove the poll when redacted
+                event.once(MatrixEventEvent.BeforeRedaction, (redactedEvent: MatrixEvent) => {
+                    this.polls.delete(redactedEvent.getId()!);
+                });
             } catch {}
             // poll creation can fail for malformed poll start events
             return;
@@ -3174,22 +3179,6 @@ export class Room extends ReadReceipt<RoomEmittedEvents, RoomEventHandlerMap> {
      */
     public isSpaceRoom(): boolean {
         return this.getType() === RoomType.Space;
-    }
-
-    /**
-     * Returns whether the room is a call-room as defined by MSC3417.
-     * @returns true if the room's type is RoomType.UnstableCall
-     */
-    public isCallRoom(): boolean {
-        return this.getType() === RoomType.UnstableCall;
-    }
-
-    /**
-     * Returns whether the room is a video room.
-     * @returns true if the room's type is RoomType.ElementVideo
-     */
-    public isElementVideoRoom(): boolean {
-        return this.getType() === RoomType.ElementVideo;
     }
 
     /**

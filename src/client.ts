@@ -2315,12 +2315,18 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
      * @param roomId - the room to use for verification
      *
      * @returns the VerificationRequest that is in progress, if any
+     * @deprecated Prefer {@link CryptoApi.findVerificationRequestDMInProgress}.
      */
     public findVerificationRequestDMInProgress(roomId: string): VerificationRequest | undefined {
         if (!this.cryptoBackend) {
             throw new Error("End-to-end encryption disabled");
+        } else if (!this.crypto) {
+            // Hack for element-R to avoid breaking the cypress tests. We can get rid of this once the react-sdk is
+            // updated to use CryptoApi.findVerificationRequestDMInProgress.
+            return undefined;
         }
-        return this.cryptoBackend.findVerificationRequestDMInProgress(roomId);
+        return this.crypto.findVerificationRequestDMInProgress(roomId);
+
     }
 
     /**
@@ -2329,6 +2335,7 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
      * @param userId - the ID of the user to query
      *
      * @returns the VerificationRequests that are in progress
+     * @deprecated Prefer {@link CryptoApi.getVerificationRequestsToDeviceInProgress}.
      */
     public getVerificationRequestsToDeviceInProgress(userId: string): VerificationRequest[] {
         if (!this.crypto) {
@@ -2346,6 +2353,8 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
      *
      * @returns resolves to a VerificationRequest
      *    when the request has been sent to the other party.
+     *
+     * @deprecated Prefer {@link CryptoApi#requestOwnUserVerification} or {@link CryptoApi#requestDeviceVerification}.
      */
     public requestVerification(userId: string, devices?: string[]): Promise<VerificationRequest> {
         if (!this.crypto) {

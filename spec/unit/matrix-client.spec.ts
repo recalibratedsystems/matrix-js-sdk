@@ -56,7 +56,6 @@ import {
     IPushRule,
     ConditionKind,
 } from "../../src";
-import { supportsMatrixCall } from "../../src/webrtc/call";
 import { makeBeaconEvent } from "../test-utils/beacon";
 import {
     IGNORE_INVITES_ACCOUNT_EVENT_KEY,
@@ -73,10 +72,6 @@ import { CryptoBackend } from "../../src/common-crypto/CryptoBackend";
 
 jest.useFakeTimers();
 
-jest.mock("../../src/webrtc/call", () => ({
-    ...jest.requireActual("../../src/webrtc/call"),
-    supportsMatrixCall: jest.fn(() => false),
-}));
 
 // Utility function to ease the transition from our QueryDict type to a Map
 // which we can use to build a URLSearchParams
@@ -1754,99 +1749,6 @@ describe("MatrixClient", function () {
             expect(opts).toMatchObject({ prefix: "/_matrix/client/v3" });
             expect(queryParams).toBeFalsy();
             expect(result!.aliases).toEqual(response.aliases);
-        });
-    });
-
-    describe("pollingTurnServers", () => {
-        afterEach(() => {
-            mocked(supportsMatrixCall).mockReset();
-        });
-
-        it("is false if the client isn't started", () => {
-            expect(client.clientRunning).toBe(false);
-            expect(client.pollingTurnServers).toBe(false);
-        });
-
-        it("is false if VoIP is not supported", async () => {
-            mocked(supportsMatrixCall).mockReturnValue(false);
-            makeClient(); // create the client a second time so it picks up the supportsMatrixCall mock
-            await client.startClient();
-            expect(client.pollingTurnServers).toBe(false);
-        });
-
-        it("is true if VoIP is supported", async () => {
-            mocked(supportsMatrixCall).mockReturnValue(true);
-            makeClient(); // create the client a second time so it picks up the supportsMatrixCall mock
-            await client.startClient();
-            expect(client.pollingTurnServers).toBe(true);
-        });
-    });
-
-    describe("checkTurnServers", () => {
-        beforeAll(() => {
-            mocked(supportsMatrixCall).mockReturnValue(true);
-        });
-
-        beforeEach(() => {
-            makeClient(); // create the client a second time so it picks up the supportsMatrixCall mock
-        });
-
-        afterAll(() => {
-            mocked(supportsMatrixCall).mockReset();
-        });
-
-        it("emits an event when new TURN creds are found", async () => {
-            const turnServer = {
-                uris: [
-                    "turn:turn.example.com:3478?transport=udp",
-                    "turn:10.20.30.40:3478?transport=tcp",
-                    "turns:10.20.30.40:443?transport=tcp",
-                ],
-                username: "1443779631:@user:example.com",
-                password: "JlKfBy1QwLrO20385QyAtEyIv0=",
-            } as unknown as ITurnServerResponse;
-            jest.spyOn(client, "turnServer").mockResolvedValue(turnServer);
-
-            const events: any[][] = [];
-            const onTurnServers = (...args: any[]) => events.push(args);
-            client.on(ClientEvent.TurnServers, onTurnServers);
-            expect(await client.checkTurnServers()).toBe(true);
-            client.off(ClientEvent.TurnServers, onTurnServers);
-            expect(events).toEqual([
-                [
-                    [
-                        {
-                            urls: turnServer.uris,
-                            username: turnServer.username,
-                            credential: turnServer.password,
-                        },
-                    ],
-                ],
-            ]);
-        });
-
-        it("emits an event when an error occurs", async () => {
-            const error = new Error(":(");
-            jest.spyOn(client, "turnServer").mockRejectedValue(error);
-
-            const events: any[][] = [];
-            const onTurnServersError = (...args: any[]) => events.push(args);
-            client.on(ClientEvent.TurnServersError, onTurnServersError);
-            expect(await client.checkTurnServers()).toBe(false);
-            client.off(ClientEvent.TurnServersError, onTurnServersError);
-            expect(events).toEqual([[error, false]]); // non-fatal
-        });
-
-        it("considers 403 errors fatal", async () => {
-            const error = { httpStatus: 403 };
-            jest.spyOn(client, "turnServer").mockRejectedValue(error);
-
-            const events: any[][] = [];
-            const onTurnServersError = (...args: any[]) => events.push(args);
-            client.on(ClientEvent.TurnServersError, onTurnServersError);
-            expect(await client.checkTurnServers()).toBe(false);
-            client.off(ClientEvent.TurnServersError, onTurnServersError);
-            expect(events).toEqual([[error, true]]); // fatal
         });
     });
 
