@@ -327,6 +327,11 @@ export interface ICreateClientOpts {
      */
     pickleKey?: string;
 
+    /**
+     * Verification methods we should offer to the other side when performing an interactive verification.
+     * If unset, we will offer all known methods. Currently these are: showing a QR code, scanning a QR code, and SAS
+     * (aka "emojis").
+     */
     verificationMethods?: Array<VerificationMethod>;
 
     /**
@@ -358,6 +363,9 @@ export interface ICreateClientOpts {
      */
     useE2eForGroupCall?: boolean;
 
+    /**
+     * Crypto callbacks provided by the application
+     */
     cryptoCallbacks?: ICryptoCallbacks;
 
     /**
@@ -2107,7 +2115,13 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
         // importing rust-crypto will download the webassembly, so we delay it until we know it will be
         // needed.
         const RustCrypto = await import("./rust-crypto");
-        const rustCrypto = await RustCrypto.initRustCrypto(this.http, userId, deviceId, this.secretStorage);
+        const rustCrypto = await RustCrypto.initRustCrypto(
+            this.http,
+            userId,
+            deviceId,
+            this.secretStorage,
+            this.cryptoCallbacks,
+        );
         this.cryptoBackend = rustCrypto;
 
         // attach the event listeners needed by RustCrypto
@@ -2759,6 +2773,7 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
      * - migrates Secure Secret Storage to use the latest algorithm, if an outdated
      *   algorithm is found
      *
+     * @deprecated Use {@link CryptoApi#bootstrapSecretStorage}.
      */
     public bootstrapSecretStorage(opts: ICreateSecretStorageOpts): Promise<void> {
         if (!this.crypto) {
