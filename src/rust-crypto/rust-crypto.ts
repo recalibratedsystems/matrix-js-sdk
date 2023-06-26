@@ -51,6 +51,7 @@ import { secretStorageContainsCrossSigningKeys } from "./secret-storage";
 import { keyFromPassphrase } from "../crypto/key_passphrase";
 import { encodeRecoveryKey } from "../crypto/recoverykey";
 import { crypto } from "../crypto/crypto";
+import { RustVerificationRequest, verificationMethodIdentifierToMethod } from "./verification";
 
 /**
  * An implementation of {@link CryptoBackend} using the Rust matrix-sdk-crypto.
@@ -543,8 +544,12 @@ export class RustCrypto implements CryptoBackend {
      * @returns the VerificationRequests that are in progress
      */
     public getVerificationRequestsToDeviceInProgress(userId: string): VerificationRequest[] {
-        // TODO
-        return [];
+        const requests: RustSdkCryptoJs.VerificationRequest[] = this.olmMachine.getVerificationRequests(
+            new RustSdkCryptoJs.UserId(this.userId),
+        );
+        return requests
+            .filter((request) => request.roomId === undefined)
+            .map((request) => new RustVerificationRequest(request, this.outgoingRequestProcessor));
     }
 
     /**
@@ -563,6 +568,13 @@ export class RustCrypto implements CryptoBackend {
     }
 
     /**
+     * The verification methods we offer to the other side during an interactive verification.
+     *
+     * If `undefined`, we will offer all the methods supported by the Rust SDK.
+     */
+    public supportedVerificationMethods: string[] | undefined;
+
+    /**
      * Send a verification request to our other devices.
      *
      * If a verification is already in flight, returns it. Otherwise, initiates a new one.
@@ -571,8 +583,20 @@ export class RustCrypto implements CryptoBackend {
      *
      * @returns a VerificationRequest when the request has been sent to the other party.
      */
-    public requestOwnUserVerification(): Promise<VerificationRequest> {
-        throw new Error("not implemented");
+    public async requestOwnUserVerification(): Promise<VerificationRequest> {
+        const userIdentity: RustSdkCryptoJs.OwnUserIdentity | undefined = await this.olmMachine.getIdentity(
+            new RustSdkCryptoJs.UserId(this.userId),
+        );
+        if (userIdentity === undefined) {
+            throw new Error("cannot request verification for this device when there is no existing cross-signing key");
+        }
+
+        const [request, outgoingRequest]: [RustSdkCryptoJs.VerificationRequest, RustSdkCryptoJs.ToDeviceRequest] =
+            await userIdentity.requestVerification(
+                this.supportedVerificationMethods?.map(verificationMethodIdentifierToMethod),
+            );
+        await this.outgoingRequestProcessor.makeOutgoingRequest(outgoingRequest);
+        return new RustVerificationRequest(request, this.outgoingRequestProcessor);
     }
 
     /**
@@ -580,15 +604,29 @@ export class RustCrypto implements CryptoBackend {
      *
      * If a verification is already in flight, returns it. Otherwise, initiates a new one.
      *
-     * Implementation of {@link CryptoApi#requestDeviceVerification }.
+     * Implementation of {@link CryptoApi#requestDeviceVerification}.
      *
      * @param userId - ID of the owner of the device to verify
      * @param deviceId - ID of the device to verify
      *
      * @returns a VerificationRequest when the request has been sent to the other party.
      */
-    public requestDeviceVerification(userId: string, deviceId: string): Promise<VerificationRequest> {
-        throw new Error("not implemented");
+    public async requestDeviceVerification(userId: string, deviceId: string): Promise<VerificationRequest> {
+        const device: RustSdkCryptoJs.Device | undefined = await this.olmMachine.getDevice(
+            new RustSdkCryptoJs.UserId(userId),
+            new RustSdkCryptoJs.DeviceId(deviceId),
+        );
+
+        if (!device) {
+            throw new Error("Not a known device");
+        }
+
+        const [request, outgoingRequest]: [RustSdkCryptoJs.VerificationRequest, RustSdkCryptoJs.ToDeviceRequest] =
+            await device.requestVerification(
+                this.supportedVerificationMethods?.map(verificationMethodIdentifierToMethod),
+            );
+        await this.outgoingRequestProcessor.makeOutgoingRequest(outgoingRequest);
+        return new RustVerificationRequest(request, this.outgoingRequestProcessor);
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
